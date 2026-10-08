@@ -1,12 +1,7 @@
+.venv*/
 .env
-.venv/
-data/chroma/*
-data/logs/*
-data/raw/*
-data/processed/*
-data/security_agent.db
-backend/.pytest_cache/
-backend/**/__pycache__/
-**/__pycache__/
 frontend/node_modules/
-frontend/dist/
+__pycache__/
+.pytest_cache/
+data/memory/*.jsonl
+*.py[cod]

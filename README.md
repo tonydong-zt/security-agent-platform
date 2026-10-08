@@ -1,451 +1,141 @@
-# AI 安全运营智能体平台
+# AI Security Agent Workbench｜本地安全研判平台
 
-这是一个防御性安全运营项目，用于上传安全文档、日志和告警文本，并通过 Chroma RAG、LangChain、LangGraph、LLM 和真实工具链完成告警调查、日志关联、风险研判、处置建议和事件报告生成。
+这是一个在 Windows 本机运行的 FastAPI + React 安全研判平台。新版加入了可审计多 Agent 链路、用户可控的本地记忆、GFM Markdown 报告、安全图表渲染和多模型供应商路由；研判必须经过真实的 LangChain LLM 推理链。未配置模型时仅可使用知识检索和独立工具工作台，不能生成研判报告。
 
-项目原则：
+## 直接运行
 
-- 不写死分析结果。
-- 不伪造封禁、隔离、阻断、删除等真实动作。
-- 未配置 LLM 时，Agent 明确失败。
-- 未配置 Embedding 时，不能构建知识库。
-- 未配置 SIEM/EDR/防火墙 API 时，只生成建议，不声称已经执行。
-- Chroma 知识库为空时，会明确提示需要先上传文档或抓取公开安全资料。
+前提：Windows 10/11，安装 Python 3.11、3.12 或 3.13。
 
-## 目录结构
+任选一种方式：
 
-```text
-security-agent-platform/
-  backend/
-    app/
-      main.py
-      config.py
-      database.py
-      agents/
-      rag/
-      routers/
-      tools/
-      integrations/
-      models/
-      schemas/
-      services/
-    tests/
-    requirements.txt
-    Dockerfile
-  frontend/
-    src/
-      pages/
-      components/
-      api/
-      types/
-    package.json
-    Dockerfile
-  data/
-    raw/
-    logs/
-    public_security/
-    processed/
-    chroma/
-  scripts/
-  .env.example
-  environment.yml
-  docker-compose.yml
-  GEMINI_EMBEDDING.md
-```
+1. 双击 `启动安全智能体平台.bat`；
+2. 在 VS Code 中运行任务“启动完整平台”；
+3. 在 PowerShell 中运行 `./start.ps1`。
 
-## 第 0 步：重要安全提醒
+启动后访问 <http://127.0.0.1:8090>，按 `Ctrl+C` 停止。首次运行会自动创建 `.venv` 并安装后端依赖；前端和 Chroma 知识库已构建完成。
 
-不要把真实 API Key 发到聊天窗口、截图、Git 仓库或 README。
+启动脚本会验证 `.venv` 是否可运行。若发现从其他电脑或路径复制而来的无效环境，它会将其改名为 `.venv-invalid-时间戳`，再使用本机 Python 重建，不需要手工删除。
 
-如果你的 DeepSeek Key 或 Gemini Key 已经出现在截图或聊天里，请立刻去对应控制台删除或重置，然后换新 key 写入 `.env`。
+## 多 Agent 协作链路
 
-## 第 1 步：准备环境
+每次研判由 LangChain LCEL RunnableSequence 编排；模型调用使用 ChatPromptTemplate → CompatibleChatModel（BaseChatModel 原生异步适配器）：
 
-推荐使用 conda：
+`规划 Agent → 证据/分类/路由 Agent → 记忆 Agent → 风险 Agent → 结构化 State Review → 报告 Agent → 最终报告 Review`
 
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-conda env create -f environment.yml
-conda activate security-agent-platform
-```
+| Agent | 职责 | 主要输出 |
+| --- | --- | --- |
+| 规划 Agent | 明确待验证问题和执行顺序 | 研判目标与计划 |
+| 证据 Agent | 分离业务上下文与安全问题，完成证据 Store、Router 和场景工具选择 | 双层候选、Workflow 路由、九层事件判断、安全实体分类、语义化 IOC、有效时间线 |
+| 记忆 Agent | 在场景与 Workflow 选定后检索经用户授权的历史经验 | 仅供参考的经验提示，不改变当前证据 |
+| 风险 Agent | 工具整理证据和规则风险分，再由 LLM 独立研判 | 模型结论、场景、置信度、当前 Evidence ID 引用、历史反馈自检 |
+| 报告 Agent | 必须调用 LLM，基于结构化研判和证据撰写报告 | 模型生成的 Markdown；图表数据来自工具 |
+| 结构化 State Review | 在报告生成前检查规范化、业务上下文、场景、路由、Workflow 证据契约和风险 Profile | 上游失败按最早责任层回滚，不生成报告 |
+| 最终报告 Review | 独立 LLM 复核，并叠加报告事实、引用、章节、图表及语义检查 | 通过才交付；最多两轮修正，重复无进展会记录循环诊断 |
 
-如果你不用 conda，也可以使用 venv：
+研判结果页会展示每个 Agent 的目标、工具、输入/输出摘要、状态和耗时。这是供审计与复核的决策轨迹，不展示模型私密思维链、隐藏提示词或敏感凭据。
 
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
-```
+实际运行时，证据 Agent 按 `Semantic Normalization → Business Context → Security Problem → Workflow Router → Scene Workflow` 执行。业务上下文输出开放 taxonomy 的 `context_id` 与数值置信度，安全问题分类器输出可含 `OTHER/unknown` 的候选集；候选支持只引用 Unified Evidence Store 的 `evidence_id`。Router 从 10 类 Workflow 中选择 primary/secondary 和 `risk_profile_id`，只执行选中 Workflow 的工具计划；Risk Agent 直接使用该 Profile。报告前的 State Review 与报告后的最终 Review 分离：上游状态错误不能由重写 Markdown 修复，报告事实/引用/结构问题只回退报告层。每次修订递增 `state_version`，记录结构化 State/报告哈希、失败规则、错误类别、回滚目标和修订动作；重复无进展会记录 `REVIEW_REPAIR_LOOP_DETECTED` 诊断并拒绝交付。仍未通过则返回 HTTP 502，不记录 completed，也不交付报告。工具 Router 仍是确定性证据收集路由，不是最终模型结论；摘要的场景、结论与置信度来自 LLM，风险分数明确标为工具指标。
 
-前端依赖：
+排障时可在启动 FastAPI 进程前设置 `ANALYSIS_DEBUG=true`。此时 `/api/analyze` 额外返回 `debug_trace`，包括规范化事件（敏感值仅保留元数据）、业务上下文、安全问题候选、Router Trace、Workflow 证据契约、统一证据 Store（当前事件/嵌入/历史 provenance）、RiskProfile、知识查询和引用 ID、结构化 State Review、最终报告 Review、State Version/哈希、回退、模型调用错误与阶段事件；默认关闭，前端也只在该字段存在时显示 Trace 面板。复核失败接口会返回安全的诊断摘要，前端展示错误类别、规则、回滚层和修订动作，不展示报告正文或敏感上下文。
 
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform\frontend
-npm install
-```
+### 双层分类与路由边界
 
-## 第 2 步：创建 .env
+- Business Context 只回答“业务正在做什么”：认证、登出、改密、资源读写、文件上传/下载、配置/日志访问、数据库操作、进程执行、网络、云/容器等；它不等于攻击结论。
+- Security Problem 只回答“可能存在什么安全问题”：弱凭据、暴力破解、未授权访问、敏感数据暴露、SQL 注入、命令注入、RCE、XSS、SSRF、路径穿越、文件/样本、扫描、横向、持久化、外传、配置错误、可疑/正常/未知等，并保留开放世界候选。
+- `backend/app/workflows.py` 的 Registry 为认证、授权、Web 攻击、文件、数据暴露、主机、网络、数据库、云和通用异常维护工具、证据 schema、风险 Profile、知识策略、修复和验证策略。低置信度/未知候选统一回退 `generic_workflow`。
+- `backend/app/evidence_store.py` 将当前事件固定为 layer 0，嵌入日志/请求/响应工件为 layer 1，历史或参考内容为 layer 2；只有 `describes_current_event=true` 且 `event_layer=0` 的证据可直接支持主场景。HTTP 200、命令字符串、文件名、缺失 Authorization 和响应敏感字段分别不能越权推出执行、恶意、未授权或外传。
 
-项目读取的是 `.env`，不是 `.env.example`。
+## Agent 工具层
 
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-copy .env.example .env
-notepad .env
-```
+平台注册十八个只读工具；每次研判只执行 Router 选定 Workflow 的相关工具：
 
-`.env.example` 是模板，真实 key 只放 `.env`。`.env` 已经在 `.gitignore` 中，不应该提交。
+| 工具 | 功能 | 输出 |
+| --- | --- | --- |
+| `normalize_alert` | 解析 HTTP 请求/响应、状态、认证、时间和网络字段 | 脱敏规范化事件；协议状态与业务结果分开；非适用字段标注 |
+| `infer_business_context` | 根据接口、方法、请求/响应语义推断业务动作和正常预期 | 业务动作/对象、观察行为、偏差、正/反证据和置信度 |
+| `build_evidence_store` | 创建统一、脱敏、可追溯的 Evidence ID 与 event layer | raw/semantic 值、适用性、source role、当前事件 provenance |
+| `classify_security_problems` | 对开放世界安全问题候选进行独立分类 | 候选、置信度、缺证、反证和 Evidence ID 支持 |
+| `route_workflow` | 按上下文、安全问题、证据覆盖和置信度做确定性路由 | primary/secondary Workflow、工具计划和 `risk_profile_id` |
+| `build_workflow_evidence` | 生成场景专用证据契约和补证策略 | evidence schema、缺口、知识、修复与验证策略 |
+| `generate_scene_candidates` | 基于规范化事实和业务上下文生成竞争场景 | 支持/反对/缺失证据、业务适配度、证据强度和置信度 |
+| `select_primary_scene` | 从候选中选择主场景 | `scene_id`、场景证据模板和主场景标记 |
+| `assess_event_layers` | 分离确认事实、合理推断和未知项 | 请求、处理、业务响应、敏感返回、认证观察、授权、漏洞、利用与影响的九层判断 |
+| `extract_iocs` | 仅在字段语义具备攻击关联时提取 IP、域名、URL、哈希和 CVE | IOC 意义、内部/私网范围、可信度与被排除的伪 IOC 候选 |
+| `extract_security_entities` | 先进行安全实体分类 | 网络 IOC、文件/样本、资产、应用、技术栈、敏感数据、身份、漏洞与系统标识符 |
+| `build_timeline` | 仅识别语义明确且有效的事件时间 | 可追溯时间线；`0`、空值和无效时间戳标记为未记录，不转换为 1970 年 |
+| `evidence_matrix` | 检查证据状态和原始字段语义冲突 | ✅ 已覆盖、⚠️ 部分覆盖、❌ 缺失、⚡ 存在冲突与有效覆盖率 |
+| `calculate_risk` | 先按主场景选择风险维度，再独立计算研判置信度 | 维度分数仅取 0/25/50/75/100 档位、场景化公式、字段证据和置信度 |
+| `search_knowledge` | 检索内置 LangChain Chroma 集合 | 通过相关度门槛的文件、分块、检索相关度和引用 ID |
+| `detect_contradictions` | 交叉检查 Agent 输出和原始字段语义 | 目标/Host、告警时间/HTTP Date、规则/响应语义及结构化结论冲突 |
+| `build_report_charts` | 把工具结果转换为安全图表规范 | 条形图、环形图和时间线图 |
+| `build_improvement_plan` | 将证据缺口转化为待审批的响应、恢复、沟通和能力改进计划 | 责任角色、时限、完成判据、关闭标准和路线图 |
 
-## 第 3 步：填写 DeepSeek LLM
+“Agent 工具”页面可以从 React 前端单独调用每个工具并查看结构化 JSON 输入/输出。工具 API 为 `GET /api/tools` 和 `POST /api/tools/execute`，未知工具会被拒绝。
 
-如果你使用 DeepSeek：
+## 本地记忆与用户反馈
 
-```env
-LLM_PROVIDER=deepseek
+- 通过模型配置预检后的告警和需求，会先脱敏并追加记录到 `data/memory/inputs.jsonl`；研判结果会记录到 `data/memory/results.jsonl`。
+- 用户可在每份报告下方点赞或点踩，并填写可选反馈；反馈写入 `data/memory/feedback.jsonl`。
+- **只有选择点赞或点踩，并明确勾选“允许学习这条记录”**，系统才请求 LLM 提炼具体认可点/错误模式、修正原则、适用条件及下次核验步骤；成功且结构验证通过后，才作为正面或反面样例写入 `data/memory/learned_patterns.jsonl`；未勾选学习不会进入经验记忆。
+- 无授权时只保存评价。无具体反馈、模型未配置、调用失败或无法提炼时，评价照常保存，界面明确显示尚未学习；不会后台自动重试。历史版本只保存评论的旧经验保留在磁盘，但不计入 LLM 已学习数量，也不自动召回。此处学习是检索记忆与提示自检，不是模型权重训练，也不保证完全避免重复错误。
+- 被召回的经验始终标注为“仅作经验提示，不替代当前告警证据”；结论仍必须由当前输入、工具结果和知识库引用支持。
+- “记忆与反馈”页面展示输入、反馈和已学习记录的数量，以及最近记录的状态。上述 JSONL 文件保留在本机且默认不纳入版本控制或交付压缩包。
 
-LLM_API_KEY=
-LLM_BASE_URL=
-LLM_MODEL=
+## 可验证决策轨迹
 
-LLM_TEMPERATURE=0.2
-LLM_TIMEOUT_SECONDS=60
+研判结果会展示每一步的目标、工具名称、输入摘要、证据字段、输出摘要、状态和耗时。model_calls 默认返回，不依赖 Debug 开关，包含 evidence_reasoning、report_generation、report_review 的真实模型名称、耗时、状态和供应商提供的 token usage。token 数缺失时显示“供应商未返回”，不编造。这是适合审计和复核的决策轨迹，不展示模型私密思维链、隐藏提示词或敏感凭据。
 
-DEEPSEEK_API_KEY=你的新DeepSeek_API_Key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=你账号可用的DeepSeek模型名
-DEEPSEEK_THINKING_ENABLED=true
-DEEPSEEK_REASONING_EFFORT=high
-```
+## Markdown 与图表报告
 
-说明：
+- 使用 `react-markdown`、`remark-gfm` 和 `rehype-sanitize` 渲染标题、表格、列表、引用、代码块和链接；不执行报告中的原始 HTML 或脚本。
+- 图表由后端返回结构化数据，React 在报告的 `<!-- chart:图表ID -->` 位置渲染，不执行模型生成的 JavaScript。
+- LLM 报告必须覆盖确认事实、合理推断、尚未确认、动态候选场景（支持/反对/缺失证据）、九层事件成立判断、按场景选择的风险维度与可复算公式、独立置信度、四态证据矩阵、安全实体与 IOC 语义及排除项、有效/未记录且去重的时间线、字段语义冲突、关联排查、响应与恢复、沟通升级、关闭标准、修复与能力改进路线图、最终一致性自检、知识引用和 Agent 工具摘要。
+- 场景识别不读取规则名称作为行为证据；认证失败、业务失败和敏感数据返回分别判断，HTTP 协议状态与业务状态分开呈现。报告长度和图表由有效证据复杂度决定，知识库只提供辅助依据，不替代当前事件证据。
+- 知识检索在场景识别之后执行，查询由主/候选场景和非敏感行为字段构成；低相关片段会被质量门过滤，凭据类值不会进入检索词。
+- 对未授权访问或敏感信息暴露场景，改进计划优先覆盖身份认证、Session 校验、对象级/功能级授权、敏感字段最小化返回、API Gateway/WAF、接口访问日志与账号行为审计；不会无依据套用 SQL 注入处置模板。
+- 改进路线图包含根因与安全开发、检测与日志、资产与权限治理、流程与演练四类措施，并给出责任角色、建议时限和可度量的完成标准；所有内容都是待审批建议，不执行系统变更。
+- 报告结构参考 [NIST SP 800-61r3](https://csrc.nist.gov/pubs/sp/800/61/r3/final) 的事件管理、分析、响应、恢复与改进思路；LLM 独立撰写并由另一次调用复核。没有本地报告基线和模板回退。
+- 报告支持复制 Markdown 和下载 `.md`。
 
-- `LLM_PROVIDER=deepseek` 时，后端读取 `DEEPSEEK_*` 这组配置。
-- `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL` 是给 `LLM_PROVIDER=openai_compatible` fallback 用的，DeepSeek 模式下可以留空。
-- `DEEPSEEK_MODEL` 不要瞎填，必须是你账号当前可用的真实模型名。
-- 如果模型或接口不支持 reasoning 参数，把 `DEEPSEEK_THINKING_ENABLED=false`。
+## 模型供应商
 
-如果以后你改用其他 OpenAI-compatible 服务：
+模型是研判的必备运行条件。没有 API Key 时后端返回 HTTP 503 MODEL_NOT_CONFIGURED，前端禁用研判按钮。use_model=false 或旧 use_deepseek=false 参数不能绕过；调用失败、截断、无效 JSON、证据引用错误或复核最终失败均拒绝交付。设置页支持：
 
-```env
-LLM_PROVIDER=openai_compatible
-LLM_API_KEY=你的API_Key
-LLM_BASE_URL=你的OpenAI兼容base_url
-LLM_MODEL=你的模型名
-```
+- DeepSeek：默认 `deepseek-chat`，也可选择 `deepseek-reasoner`；
+- OpenAI-compatible：填写兼容 Chat Completions 的模型名称和 API Key；
+- 自定义兼容接口：可连接本机 `127.0.0.1`/`localhost` 模型或其他 HTTPS 服务。
 
-## 第 4 步：填写 Embedding
+API Key 只提交到本机 FastAPI 后端；选择持久化时写入 Windows 凭据管理器，不进入 `localStorage`、`sessionStorage` 或前端构建产物。也可复制 `.env.example` 为 `.env` 后配置 `MODEL_PROVIDER`、`MODEL_API_KEY`、`MODEL_NAME` 和 `MODEL_BASE_URL`。
 
-知识库入库必须配置 Embedding。你现在想用 Gemini，推荐这样填：
+## 知识库
 
-```env
-EMBEDDING_PROVIDER=gemini
+- 集合：`security_knowledge`；
+- 原始文档：50；
+- 向量片段：2078；
+- 嵌入：`local-security-hash-384`；
+- 存储：项目内嵌 Chroma，不需要 PostgreSQL、MySQL、SQLite 业务库或独立 Chroma Server。
 
-EMBEDDING_API_KEY=
-EMBEDDING_BASE_URL=
-EMBEDDING_MODEL=
-LOCAL_EMBEDDING_MODEL=
+## 开发与验证
 
-GEMINI_API_KEY=你的Google_Gemini_API_Key
-GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-GEMINI_EMBEDDING_TASK_TYPE=RETRIEVAL_DOCUMENT
-GEMINI_EMBEDDING_OUTPUT_DIMENSION=
-```
-
-说明：
-
-- `EMBEDDING_PROVIDER=gemini` 时，后端调用 Google Gemini 原生 embedding API。
-- 不要把 Gemini 原生 API 地址填到 `EMBEDDING_BASE_URL`。
-- `EMBEDDING_BASE_URL` 只给 OpenAI-compatible `/embeddings` 服务使用。
-- `GEMINI_EMBEDDING_MODEL` 必须是你 Google 账号可用的 embedding 模型。
-- `GEMINI_EMBEDDING_OUTPUT_DIMENSION` 可以留空。
-
-如果你使用 OpenAI-compatible embedding 中转：
-
-```env
-EMBEDDING_PROVIDER=openai_compatible
-EMBEDDING_API_KEY=你的Embedding_API_Key
-EMBEDDING_BASE_URL=你的OpenAI兼容embedding_base_url
-EMBEDDING_MODEL=你的embedding模型名
-```
-
-如果你使用本地 sentence-transformers：
-
-```env
-EMBEDDING_PROVIDER=local
-LOCAL_EMBEDDING_MODEL=你的本地模型名或路径
-```
-
-本地 embedding 会占用本机 CPU/GPU，可能比云 API 慢。
-
-## 第 5 步：数据库和 Chroma
-
-本地快速测试可以这样保留：
-
-```env
-DATABASE_URL=
-CHROMA_PERSIST_DIR=./data/chroma
-CHROMA_COLLECTION_NAME=security_knowledge
-```
-
-`DATABASE_URL=` 留空时，后端自动使用 SQLite fallback：
-
-```text
-./data/security_agent.db
-```
-
-如果要使用 PostgreSQL：
-
-```env
-DATABASE_URL=postgresql+psycopg://用户名:密码@数据库地址:5432/数据库名
-```
-
-## 第 6 步：外部安全工具配置
-
-没有真实 SIEM/EDR/防火墙 API 时，全部留空：
-
-```env
-SIEM_API_URL=
-SIEM_API_KEY=
-SIEM_VENDOR=
-
-EDR_API_URL=
-EDR_API_KEY=
-EDR_VENDOR=
-
-FIREWALL_API_URL=
-FIREWALL_API_KEY=
-FIREWALL_VENDOR=
-```
-
-留空时系统不会执行真实查询、封禁、隔离或阻断，只会返回建议或 `tool_not_configured`。
-
-## 第 7 步：初始化数据库
+后端：
 
 ```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-$env:PYTHONPATH="backend"
-python scripts\init_db.py
+$env:PYTHONPATH = (Resolve-Path ./backend).Path
+./.venv/Scripts/python.exe -m ruff check ./backend
+./.venv/Scripts/python.exe -m pytest ./backend/tests -q
 ```
 
-## 第 8 步：启动后端
+当前回归为 76 项后端测试。LLM 测试在 HTTP 传输边界注入 MockTransport，实际经过 LCEL、模型适配器、提示与结构化解析；不代表真实供应商推理质量验证。涵盖无模型、绕过参数、三个阶段超时/401/空输出/截断、非法 JSON/证据引用、有限复核重试、正反反馈提炼及召回自检。测试隔离 Windows 凭据和个人 JSONL，绝不调用真实密钥。首次运行测试需安装 backend/requirements-dev.txt。
+
+前端：
 
 ```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-$env:PYTHONPATH="backend"
-uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+cd frontend
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm build
 ```
 
-检查健康状态：
+实际供应商端到端验证仍需要用户配置并测试 API Key；本次仅验证了模拟模型完整路径与真实服务的缺模型拦截。
 
-```powershell
-curl http://127.0.0.1:8000/api/health
-```
-
-正常情况下你应该看到：
-
-```json
-{
-  "backend": "ok",
-  "database": "ok",
-  "llm": "ok",
-  "embedding": "ok"
-}
-```
-
-如果 `embedding=missing_config`，说明 Gemini 或其他 embedding 配置没填完整。
-
-如果 `chroma=empty`，这是正常的，表示你还没有上传知识库文档。
-
-## 第 9 步：启动前端
-
-新开一个 PowerShell：
-
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform\frontend
-npm run dev
-```
-
-浏览器访问：
-
-```text
-http://127.0.0.1:5173
-```
-
-如果前端部署到服务器，需要设置：
-
-```env
-VITE_API_BASE_URL=https://你的后端域名
-```
-
-否则前端开发模式默认访问：
-
-```text
-http://localhost:8000
-```
-
-## 第 10 步：上传知识库文档
-
-在前端打开 `Knowledge Base` 页面：
-
-1. 上传 PDF、TXT、MD、CSV、JSON 或 LOG 文件。
-2. 后端会解析文本。
-3. 文本会切分成 chunks。
-4. Gemini embedding 会把 chunks 转成向量。
-5. Chroma 保存向量和 metadata。
-6. 页面返回真实 chunk 数量。
-
-如果 Embedding 没配好，上传会失败，不会假装成功。
-
-## 第 11 步：上传日志
-
-在前端打开 `Log Upload` 页面：
-
-1. 上传 `.log`、`.txt`、`.json` 或 `.csv` 日志。
-2. 系统会保存原始日志。
-3. 系统会尝试解析：
-   - timestamp
-   - source_ip
-   - destination_ip
-   - username
-   - hostname
-   - process_name
-   - event_type
-   - message
-4. 解析失败的行也会保存 `raw_message`。
-
-## 第 12 步：发起调查
-
-在前端打开 `Investigation` 页面：
-
-1. 输入问题，例如 `请分析这条告警`。
-2. 粘贴告警文本。
-3. 勾选是否使用日志和知识库。
-4. 点击开始。
-
-系统会真正运行 LangGraph Agent：
-
-```text
-validate_runtime_config
-intent_classification
-entity_extraction
-evidence_collection
-rag_retrieval
-threat_analysis
-tool_decision
-action_planning
-human_approval_check
-report_generation
-```
-
-页面会显示：
-
-- Agent trace
-- 日志匹配结果
-- RAG 检索结果
-- 工具调用记录
-- 风险等级
-- 建议动作
-- Markdown 事件报告
-
-## 第 13 步：人工审批动作
-
-在 `Action Approval` 页面审批高危动作。
-
-没有真实外部 API 时，执行会失败并返回：
-
-```json
-{
-  "status": "failed",
-  "code": "tool_not_configured"
-}
-```
-
-这是正确行为，不是错误。系统不会伪造真实动作成功。
-
-## Docker Compose 启动
-
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-copy .env.example .env
-notepad .env
-docker compose up --build
-```
-
-注意：`docker-compose.yml` 里的 PostgreSQL 密码只是本地示例，生产环境必须替换。
-
-## 测试
-
-安装依赖后运行：
-
-```powershell
-cd C:\Users\19801\Documents\Codex\2026-07-08\qing\security-agent-platform
-$env:PYTHONPATH="backend"
-pytest backend\tests
-```
-
-测试覆盖：
-
-- health 配置缺失检查。
-- Gemini embedding 缺失配置检查。
-- Chroma 空库检索。
-- 文档上传。
-- 日志上传解析。
-- LLM 未配置时调查明确失败。
-- Mock LLM 下 LangGraph 节点执行。
-- 防火墙未配置时返回 `tool_not_configured`。
-- 未配置外部动作不允许假成功。
-
-## 如何验证不是固定假回复
-
-1. 上传不同知识库文档，检索不同关键词，看 chunk、source、score 是否变化。
-2. 上传不同日志，调查不同 IP、用户名、主机和进程，看日志匹配是否变化。
-3. 发起不同告警调查，看实体提取、RAG 检索、工具调用、风险等级和报告内容是否变化。
-4. 不上传知识库时，系统会提示知识库为空。
-5. 不上传日志时，系统会提示未发现可用日志。
-6. 不配置外部 API 时，动作审批返回 `tool_not_configured`。
-
-## 常见问题
-
-### `.env.example` 改了为什么没生效？
-
-程序读取 `.env`，不是 `.env.example`。你需要把配置写到 `.env`，然后重启后端。
-
-### 为什么有 localhost？
-
-`localhost` 只是本地开发默认值。部署到服务器时，把前端的 `VITE_API_BASE_URL` 改成后端域名，并让后端监听 `0.0.0.0`。
-
-### 为什么 Chroma 是 empty？
-
-说明还没有上传知识库文档。先去 `Knowledge Base` 上传资料。
-
-### 为什么 Action Approval 不能执行？
-
-如果 EDR 或 Firewall API 没配置，系统会禁用或返回 `tool_not_configured`。这是为了避免伪造执行结果。
-
-## 后续你需要补充的真实内容
-
-- DeepSeek API Key。
-- DeepSeek base URL。
-- DeepSeek 模型名。
-- Gemini API Key。
-- Gemini embedding 模型名。
-- 真实安全文档。
-- 真实安全日志。
-- SIEM API 文档。
-- EDR API 文档。
-- 防火墙 API 文档。
-- 服务器部署地址、数据库账号、TLS 和反向代理配置。
-
-## 防御性安全边界
-
-本项目只用于告警调查、日志分析、风险研判、处置建议、人工审批后的防御性动作和报告生成。
-
-本项目不实现：
-
-- 漏洞利用代码。
-- 攻击载荷生成。
-- 恶意代码生成。
-- 绕过检测。
-- 凭据窃取。
-- 未授权扫描。
-- 真实攻击自动化。
+安全边界：平台工具层只读，不执行 Shell、CMD、PowerShell、任意文件写入、防火墙变更或进程终止。报告中的处置内容始终是建议，不代表已执行。

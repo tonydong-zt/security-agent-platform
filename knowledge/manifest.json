@@ -1,0 +1,11 @@
+{
+  "format": "langchain-chroma-local-v1",
+  "collection": "security_knowledge",
+  "source": "knowledge-base.zip",
+  "source_sha256": "0e3ea410769d5701762dd93f59005649227ae1d65b480a1f3865573ff9099dc8",
+  "document_count": 50,
+  "chunk_count": 2078,
+  "embedding": "local-security-hash-384",
+  "dimensions": 384,
+  "external_database_required": false
+}

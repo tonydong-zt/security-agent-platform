@@ -1,0 +1,27 @@
+{
+  "scope": "Independent synthetic alert only; no production or historical alert values were sent to the provider.",
+  "provider_validation": {
+    "status": "completed",
+    "model_stages": [
+      "evidence_reasoning",
+      "report_generation",
+      "report_review"
+    ],
+    "review_approved": true,
+    "state_version": 1
+  },
+  "deterministic_route": {
+    "selected_scene_id": "plaintext_credential",
+    "workflow_id": "data_exposure_workflow",
+    "risk_profile_id": "DATA_EXPOSURE_RISK"
+  },
+  "observed_repairs": [
+    "report output budget prevents provider length truncation",
+    "report sections accept independent response/recovery and communication/escalation headings",
+    "assessment feedback_checks must exactly match recalled lesson IDs",
+    "structured model output accepts safe fence/provider variants before Pydantic validation",
+    "boundary wording is not treated as a positive exploitation claim",
+    "knowledge and evidence references are checked against the current run"
+  ],
+  "private_replay_note": "The historical MEM-E7854CE3B57C input was deterministically replayed for normalization/classification/routing. Its byte-level external replay was not performed because it contains a real credential; external-model validation used the independent synthetic sample above."
+}

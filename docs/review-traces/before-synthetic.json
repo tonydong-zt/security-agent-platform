@@ -1,0 +1,707 @@
+{
+  "scope": "Real DeepSeek calls with a fully synthetic counterexample; NOT replay of private MEM-E7854CE3B57C. Knowledge and memory were isolated.",
+  "capture_note": "First iteration console checklist was truncated; its model decision, hashes and failed section summary were observed. Iterations 2/3 below are complete.",
+  "first_iteration_summary": {
+    "iteration": 1,
+    "context": "file_upload",
+    "workflow": "file_workflow",
+    "risk_profile": "FILE_RISK",
+    "state_hash": "94f1f6a6583eab6f56126ea568390ecb3631597d66619e2e4dd28b627779ed3c",
+    "report_hash": "405d36a7d54b7944644a1d91b17a83c9e7f5b2f81beebc184ef484c5966a6639",
+    "failed_rules": [
+      "security_claims_have_evidence",
+      "unknown_knowledge_reference",
+      "required_section_literal"
+    ],
+    "missing_sections": [
+      "响应、恢复",
+      "沟通、升级"
+    ],
+    "rollback_target": "report"
+  },
+  "records": [
+    {
+      "event": "llm_start",
+      "stage": "evidence_reasoning"
+    },
+    {
+      "event": "llm_output",
+      "stage": "evidence_reasoning",
+      "output": {
+        "conclusion": "该告警为一个 HTTP GET 请求 /api/resource/detail，服务端返回 200 且响应体包含 \"passWord\" 字段（值已脱敏）。业务上下文声称是 file_upload（文件上传），但实际请求方法是 GET 且路径为资源详情接口，与预期的上传业务行为（接收文件→校验→存储）明显不符。HTTP 200 仅证明请求被服务器接收并返回成功状态，不能证明漏洞利用成功或数据泄露。认证信息存在但未验证（session_present_unvalidated），无法确认请求者是否具备合法授权。响应体中的 passWord 字段暗示可能存在敏感信息暴露，但其是否为实际凭据、以及该响应是否越权，均无闭环证据。候选路由将场景归类为文件上传滥用，但当前证据（GET 请求、资源详情路径、响应体含密码字段）更符合信息泄露/未授权访问特征，而非文件上传。综合判断：存在可疑迹象，但缺乏足以定性为恶意的关键证据（授权校验结果、数据敏感性确认、关联行为），判定为 suspicious。",
+        "primary_scenario": "疑似敏感信息暴露/未授权访问（待确认）——证据不支持文件上传场景，响应体含 passWord 字段，但授权与数据敏感性未闭环",
+        "verdict": "suspicious",
+        "confidence": 55,
+        "confirmed_facts": [
+          {
+            "statement": "HTTP 请求方法为 GET，请求路径为 /api/resource/detail。",
+            "evidence_ids": [
+              "E001",
+              "E002"
+            ]
+          },
+          {
+            "statement": "服务端返回 HTTP 状态码 200（OK）。",
+            "evidence_ids": [
+              "E003",
+              "E006"
+            ]
+          },
+          {
+            "statement": "请求头中包含 Cookie 认证信息（值为 diagnostic-placeholder，状态为 session_present_unvalidated），认证有效性未确认。",
+            "evidence_ids": [
+              "E004",
+              "E005"
+            ]
+          },
+          {
+            "statement": "响应体为 JSON 对象，包含键 ret、data、msg、code，其中 data.host 下存在 passWord 字段（值已脱敏为 [REDACTED]），业务响应 code 为 SUCCESS。",
+            "evidence_ids": [
+              "E007"
+            ]
+          }
+        ],
+        "hypotheses": [
+          "H1: 该请求为合法用户通过正常认证访问资源详情接口，响应体中的 passWord 字段为业务逻辑允许返回的字段（如主机配置），并非安全事件。",
+          "H2: 该请求为未授权访问尝试，攻击者通过越权访问获取了包含密码的敏感数据，属于信息泄露/IDOR 类漏洞。",
+          "H3: 告警为误报或诊断性测试数据（alert name 为 'Synthetic diagnostic alert'，Cookie 为 diagnostic-placeholder），不代表真实攻击。",
+          "H4: 存在命令执行漏洞，攻击者通过该接口执行了命令并返回了主机密码信息（候选场景 command_execution），但当前证据严重不足。"
+        ],
+        "evidence_gaps": [
+          "缺少请求者的身份标识（源 IP、用户名）及服务端认证/授权校验结果，无法确认该请求是否越权。",
+          "缺少请求参数（GET query string 或 body），无法确认请求上下文及所请求的资源。",
+          "缺少应用日志以确认该请求对应的业务处理结果及访问控制策略。",
+          "缺少关于 passWord 字段敏感性的认定依据（是否为真实生产凭据、脱敏前值、字段语义）。",
+          "缺少关联行为证据（如后续的数据外传、横向移动、多次尝试），无法判断攻击意图或影响范围。",
+          "缺少该接口的业务定义（正常是否应返回密码字段），无法判定响应内容是否异常。"
+        ],
+        "recommended_checks": [
+          "核查审计日志中该请求的认证会话有效性及授权判定结果，确认请求者是否具备访问 /api/resource/detail 的权限。",
+          "检查 /api/resource/detail 接口的源码或配置，确认其设计上是否应返回 passWord 字段，以判断响应内容是否越权。",
+          "查询同源 IP 或会话在附近时间窗内的所有请求，排查是否存在批量枚举或未授权访问模式。",
+          "在受控环境复现该请求（使用合法与非法会话各一次），对比响应内容以确认是否存在 IDOR/越权漏洞。",
+          "确认 responseBody 中 passWord 字段的实际值是否为敏感凭据，并检查其是否出现在不应出现的响应上下文中。"
+        ],
+        "feedback_checks": []
+      },
+      "call": {
+        "stage": "evidence_reasoning",
+        "framework": "langchain",
+        "model_provider": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "success": true,
+        "fallback_used": false,
+        "usage": {
+          "prompt_tokens": 10074,
+          "completion_tokens": 1012,
+          "total_tokens": 11086,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "prompt_cache_hit_tokens": 0,
+          "prompt_cache_miss_tokens": 10074
+        },
+        "latency_ms": 13026.15
+      }
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_generation"
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_review"
+    },
+    {
+      "event": "llm_output",
+      "stage": "report_review",
+      "output": {
+        "approved": false,
+        "issues": [
+          "报告将事件场景从工具/路由的 file_upload 更改为疑似信息泄露/未授权访问，与 rule_review 的 rule_router_candidate 和 rule_event_assessment 选择的 scene_id=malware_file (file_upload_abuse) 不一致，导致风险画像 (FILE_RISK) 的维度语义与报告叙述脱节",
+          "报告未明确标注其为独立复核员对工具场景的覆盖性判断，而是将场景重定义作为报告事实呈现，混淆了工具输出与独立分析，违反了审查要求中关于区分工具与独立判断的边界",
+          "报告在核心证据链和事实范围中，将 E006/E007 的置信度按工具原值保留，但报告在场景重定义（从文件上传改为信息泄露）时，未同步说明该重定义是基于哪些证据的可信解释，导致定性结论与证据支持的关系不够明确",
+          "报告在风险维度部分明确提示执行状态100仅代表HTTP状态，但其依据的响应体含有密码字段与文件上传工作流的关联性未获证据支撑，渲染该维度高分的意义存疑",
+          "报告未针对 rule_review 的 failure_reason 进行明确和充分的回应，即未具体说明为何当前证据虽不构成直接攻击成功证据，但报告仍判定为 suspicious 而非保留未知/未能确认状态，使复核结论与审查失败原因关联不清晰"
+        ],
+        "correction_instructions": [
+          "在报告的场景识别部分，应明确区分工具输出（primary scene: file_upload_abuse）与您的独立判断（更符合信息泄露特征）。可以独立判断覆盖，但必须显式描述依据和不确定性，并解释为何在证据薄弱时未遵循路由选择而进行了二次归类",
+          "在报告开头或场景识别部分，补充对 rule_review 的 failure 状态的直接回应，说明您已检查所有关键定性结论都有对应的直接证据（如 E007 的字段），并解释为何将其归类为 suspicious 且置信度 55 是合适的，而不是认为该判定本身需要标记为含未确认组件",
+          "纠正 '事故成立层级' 表中 L4 的措辞，明确标注其为部分确认的内容是关于'字段存在'而非'信息实际泄露'，并确保所有关于'泄露'的假设都用条件句式呈现，避免与已确认事实混淆",
+          "考虑在报告中为工具风险指标（execution_success=100）的过强语义提供更明确的注释，或建议工具输出时即对含敏感字段响应但无执行证据的维度进行降低分，以减少误导",
+          "确保报告开头的核心结论部分明确声明：本报告的场景定性为独立复核判断，不代表工具/路由的原始选择，也不代表对工具错误的自动认定，工具选择仅供参考，在证据不足时独立判断是允许的，但必须在场景冲突处提供足够证据说明"
+        ]
+      },
+      "call": {
+        "stage": "report_review",
+        "framework": "langchain",
+        "model_provider": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "success": true,
+        "fallback_used": false,
+        "usage": {
+          "prompt_tokens": 19656,
+          "completion_tokens": 636,
+          "total_tokens": 20292,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "prompt_cache_hit_tokens": 0,
+          "prompt_cache_miss_tokens": 19656
+        },
+        "latency_ms": 13313.82
+      }
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_generation"
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_review"
+    },
+    {
+      "event": "llm_output",
+      "stage": "report_review",
+      "output": {
+        "approved": false,
+        "issues": [
+          "llm_assessment 与 rule_review 对场景的定性存在根本性分歧：llm_assessment 和报告将场景重定义为疑似敏感信息暴露/未授权访问，而 rule_review 的工具候选和主场景为 file_upload_abuse (malware_file)。报告虽声明这是独立判断，但 rule_review 的 PASS 状态与其自身工具输出不一致，且报告未能说明为何在证据不足时覆盖路由选择，导致工具链内部对风险画像（FILE_RISK）与叙述脱节，未达成一致性。",
+          "报告在 7.2 节将 E001 (GET)、E002 (/api/resource/detail)、E005 (requestHead) 标为支持'信息泄露'场景，但证据库中这些证据的语义值仅为 http_method、request_target，未包含任何指向信息泄露的语义；该场景关联属无证据支撑的推断，违反 security_claims_have_evidence 要求。",
+          "报告 8.3 节对工具评分（execution_success=100）提出修正，但报告正文（第七、八、十节）仍使用该工具的 75/100 高风险评分作为'条件风险'呈现，未在最终结论中明确该工具评分因执行证据缺失而应下调，导致结论与风险呈现不一致，可能误导读者。",
+          "报告 10.3 节将'潜在影响'标为'高'（若 passWord 为真实凭据），但该可能性无任何证据支撑，且未在置信度章节中将其概率化，构成无依据的风险断言。"
+        ],
+        "correction_instructions": [
+          "修复场景定性冲突：在报告的最终结论和置信度章节，需明确 reconcile llm_assessment 的'敏感信息暴露'独立判断与 rule_review 的 'file_upload_abuse' 主场景。要么为覆盖提供更强证据（如历史 IDOR 模式，但当前无此证据），要么在置信度中明确标注'场景判定存在分歧（信息泄露 vs 文件上传），且因证据不足无法消解'，而不是将其作为单一事实呈现。",
+          "删除或重新标注 7.2 节中 E001、E002、E005 对'信息泄露'场景的支持标签：证据库中这些证据仅确认方法、路径、请求头存在，无信息泄露语义。应将这些证据标为'通用/待关联'，仅 E007（响应体含敏感字段名）为敏感数据线索。",
+          "在最终结论中显式修正工具风险评分：因执行证据（进程树、命令执行等）全部缺失，应说明工具给出的 75/100 高风险仅为'事件成立时条件严重度'，且因执行状态无证据，该评分不反映当前可确认风险；建议将工具 execution_success 维度视为不适用（0 或 N/A），而非按原值引用。",
+          "将 10.3 节'潜在影响高'改为条件性表述并降低措辞强度：改为'若经授权确认 passWord 为生产凭据且接口存在 IDOR，则潜在影响可能上升；但当前无证据支持该可能性，故不据此上调当前风险'。"
+        ]
+      },
+      "call": {
+        "stage": "report_review",
+        "framework": "langchain",
+        "model_provider": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "success": true,
+        "fallback_used": false,
+        "usage": {
+          "prompt_tokens": 23641,
+          "completion_tokens": 715,
+          "total_tokens": 24356,
+          "prompt_tokens_details": {
+            "cached_tokens": 6912
+          },
+          "prompt_cache_hit_tokens": 6912,
+          "prompt_cache_miss_tokens": 16729
+        },
+        "latency_ms": 11679.05
+      }
+    },
+    {
+      "event": "review_iteration",
+      "iteration": 2,
+      "start_index": 4,
+      "state_hash": "94f1f6a6583eab6f56126ea568390ecb3631597d66619e2e4dd28b627779ed3c",
+      "report_hash": "e86db2f2b93f6f6f888175574eaeca920cd371948bf585035874322d12d85e44",
+      "context": "file_upload",
+      "workflow": "file_workflow",
+      "risk_profile": "FILE_RISK",
+      "review": {
+        "status": "FAIL",
+        "approved": false,
+        "failures": [],
+        "checks": [
+          {
+            "id": "http_status_matches_report",
+            "status": "PASS",
+            "message": "报告必须保留已观察到的 HTTP 2xx 状态，不得写成没有 2xx。"
+          },
+          {
+            "id": "business_result_matches_report",
+            "status": "PASS",
+            "message": "business_result.success=true 时，报告不能把业务结果写成未知。"
+          },
+          {
+            "id": "business_context_is_structured",
+            "status": "PASS",
+            "message": "业务上下文必须包含开放 taxonomy 的 context_id 和 0–1 数值置信度。"
+          },
+          {
+            "id": "authorization_matches_report",
+            "status": "PASS",
+            "message": "Authorization/Cookie 存在时，报告必须说明已观察到字段并保留其有效性未确认边界。"
+          },
+          {
+            "id": "field_applicability_is_respected",
+            "status": "PASS",
+            "message": "不适用字段的 0/false 不能被报告解释成攻击行为或负证据。"
+          },
+          {
+            "id": "scene_matches_business_context",
+            "status": "PASS",
+            "message": "正常登录成功返回当前主体 Token/Session 不能自动升级为数据泄露场景。"
+          },
+          {
+            "id": "router_matches_security_problem",
+            "status": "PASS",
+            "message": "Router 的 selected_scene_id 必须与安全问题分类器的主候选一致。"
+          },
+          {
+            "id": "workflow_is_registered",
+            "status": "PASS",
+            "message": "Router 必须输出已注册 Workflow、risk_profile_id 及专用策略。"
+          },
+          {
+            "id": "main_scene_uses_current_evidence",
+            "status": "PASS",
+            "message": "主场景支持只能引用当前事件 layer=0 的 Evidence ID；无效引用：无。"
+          },
+          {
+            "id": "workflow_contract_is_bound",
+            "status": "PASS",
+            "message": "专用 Workflow 证据契约必须绑定 Router 选择且包含 evidence schema。"
+          },
+          {
+            "id": "risk_profile_matches_scene",
+            "status": "PASS",
+            "message": "风险 Profile (malware_file) 必须与主场景 (malware_file) 一致。"
+          },
+          {
+            "id": "risk_profile_matches_router",
+            "status": "PASS",
+            "message": "Risk Agent 必须使用 Router 选定的 risk_profile_id，不得二次猜测场景。"
+          },
+          {
+            "id": "remediation_matches_scene",
+            "status": "PASS",
+            "message": "无需执行数据暴露专用修复冲突检查。"
+          },
+          {
+            "id": "security_claims_have_evidence",
+            "status": "PASS",
+            "message": "攻击成功、成功利用、数据外泄或未授权访问成功等结论必须有对应直接证据。"
+          },
+          {
+            "id": "upstream_state_is_consistent",
+            "status": "PASS",
+            "message": "上游规范化/字段语义存在冲突，必须在交付前保留 REVIEW FAILED。"
+          }
+        ],
+        "failure_reason": "缺少必需报告章节：关闭标准",
+        "rollback_target": "report",
+        "reviewed_final_report": true,
+        "conflicts": [],
+        "llm_review": {
+          "approved": false,
+          "issues": [
+            "llm_assessment 与 rule_review 对场景的定性存在根本性分歧：llm_assessment 和报告将场景重定义为疑似敏感信息暴露/未授权访问，而 rule_review 的工具候选和主场景为 file_upload_abuse (malware_file)。报告虽声明这是独立判断，但 rule_review 的 PASS 状态与其自身工具输出不一致，且报告未能说明为何在证据不足时覆盖路由选择，导致工具链内部对风险画像（FILE_RISK）与叙述脱节，未达成一致性。",
+            "报告在 7.2 节将 E001 (GET)、E002 (/api/resource/detail)、E005 (requestHead) 标为支持'信息泄露'场景，但证据库中这些证据的语义值仅为 http_method、request_target，未包含任何指向信息泄露的语义；该场景关联属无证据支撑的推断，违反 security_claims_have_evidence 要求。",
+            "报告 8.3 节对工具评分（execution_success=100）提出修正，但报告正文（第七、八、十节）仍使用该工具的 75/100 高风险评分作为'条件风险'呈现，未在最终结论中明确该工具评分因执行证据缺失而应下调，导致结论与风险呈现不一致，可能误导读者。",
+            "报告 10.3 节将'潜在影响'标为'高'（若 passWord 为真实凭据），但该可能性无任何证据支撑，且未在置信度章节中将其概率化，构成无依据的风险断言。"
+          ],
+          "correction_instructions": [
+            "修复场景定性冲突：在报告的最终结论和置信度章节，需明确 reconcile llm_assessment 的'敏感信息暴露'独立判断与 rule_review 的 'file_upload_abuse' 主场景。要么为覆盖提供更强证据（如历史 IDOR 模式，但当前无此证据），要么在置信度中明确标注'场景判定存在分歧（信息泄露 vs 文件上传），且因证据不足无法消解'，而不是将其作为单一事实呈现。",
+            "删除或重新标注 7.2 节中 E001、E002、E005 对'信息泄露'场景的支持标签：证据库中这些证据仅确认方法、路径、请求头存在，无信息泄露语义。应将这些证据标为'通用/待关联'，仅 E007（响应体含敏感字段名）为敏感数据线索。",
+            "在最终结论中显式修正工具风险评分：因执行证据（进程树、命令执行等）全部缺失，应说明工具给出的 75/100 高风险仅为'事件成立时条件严重度'，且因执行状态无证据，该评分不反映当前可确认风险；建议将工具 execution_success 维度视为不适用（0 或 N/A），而非按原值引用。",
+            "将 10.3 节'潜在影响高'改为条件性表述并降低措辞强度：改为'若经授权确认 passWord 为生产凭据且接口存在 IDOR，则潜在影响可能上升；但当前无证据支持该可能性，故不据此上调当前风险'。"
+          ]
+        },
+        "reference_issues": [],
+        "missing_sections": [
+          "关闭标准"
+        ],
+        "boundary": "历史经验未被当作当前事件证据；最终 Markdown 已与规范化事件、业务上下文、主场景、证据和风险 Profile 交叉复核；报告未声明任何系统动作已执行。",
+        "report_characters": 15397,
+        "review_iteration": 1
+      },
+      "report_characters": 15397,
+      "model_calls": [
+        {
+          "stage": "evidence_reasoning",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 10074,
+            "completion_tokens": 1012,
+            "total_tokens": 11086,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 10074
+          },
+          "latency_ms": 13026.15
+        },
+        {
+          "stage": "report_generation",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 12760,
+            "completion_tokens": 5588,
+            "total_tokens": 18348,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 12760
+          },
+          "latency_ms": 49810.63
+        },
+        {
+          "stage": "report_review",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 19656,
+            "completion_tokens": 636,
+            "total_tokens": 20292,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 19656
+          },
+          "latency_ms": 13313.82
+        },
+        {
+          "stage": "report_generation",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 14190,
+            "completion_tokens": 7961,
+            "total_tokens": 22151,
+            "prompt_tokens_details": {
+              "cached_tokens": 12672
+            },
+            "prompt_cache_hit_tokens": 12672,
+            "prompt_cache_miss_tokens": 1518
+          },
+          "latency_ms": 67581.35
+        },
+        {
+          "stage": "report_review",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 23641,
+            "completion_tokens": 715,
+            "total_tokens": 24356,
+            "prompt_tokens_details": {
+              "cached_tokens": 6912
+            },
+            "prompt_cache_hit_tokens": 6912,
+            "prompt_cache_miss_tokens": 16729
+          },
+          "latency_ms": 11679.05
+        }
+      ]
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_generation"
+    },
+    {
+      "event": "llm_start",
+      "stage": "report_review"
+    },
+    {
+      "event": "llm_output",
+      "stage": "report_review",
+      "output": {
+        "approved": true,
+        "issues": [],
+        "correction_instructions": []
+      },
+      "call": {
+        "stage": "report_review",
+        "framework": "langchain",
+        "model_provider": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "success": true,
+        "fallback_used": false,
+        "usage": {
+          "prompt_tokens": 22643,
+          "completion_tokens": 25,
+          "total_tokens": 22668,
+          "prompt_tokens_details": {
+            "cached_tokens": 12672
+          },
+          "prompt_cache_hit_tokens": 12672,
+          "prompt_cache_miss_tokens": 9971
+        },
+        "latency_ms": 4504.54
+      }
+    },
+    {
+      "event": "review_iteration",
+      "iteration": 3,
+      "start_index": 4,
+      "state_hash": "94f1f6a6583eab6f56126ea568390ecb3631597d66619e2e4dd28b627779ed3c",
+      "report_hash": "00eefca2cf6d422814191ad593fb70650e009120ddcfc5c60461235ca03af096",
+      "context": "file_upload",
+      "workflow": "file_workflow",
+      "risk_profile": "FILE_RISK",
+      "review": {
+        "status": "FAIL",
+        "approved": false,
+        "failures": [],
+        "checks": [
+          {
+            "id": "http_status_matches_report",
+            "status": "PASS",
+            "message": "报告必须保留已观察到的 HTTP 2xx 状态，不得写成没有 2xx。"
+          },
+          {
+            "id": "business_result_matches_report",
+            "status": "PASS",
+            "message": "business_result.success=true 时，报告不能把业务结果写成未知。"
+          },
+          {
+            "id": "business_context_is_structured",
+            "status": "PASS",
+            "message": "业务上下文必须包含开放 taxonomy 的 context_id 和 0–1 数值置信度。"
+          },
+          {
+            "id": "authorization_matches_report",
+            "status": "PASS",
+            "message": "Authorization/Cookie 存在时，报告必须说明已观察到字段并保留其有效性未确认边界。"
+          },
+          {
+            "id": "field_applicability_is_respected",
+            "status": "PASS",
+            "message": "不适用字段的 0/false 不能被报告解释成攻击行为或负证据。"
+          },
+          {
+            "id": "scene_matches_business_context",
+            "status": "PASS",
+            "message": "正常登录成功返回当前主体 Token/Session 不能自动升级为数据泄露场景。"
+          },
+          {
+            "id": "router_matches_security_problem",
+            "status": "PASS",
+            "message": "Router 的 selected_scene_id 必须与安全问题分类器的主候选一致。"
+          },
+          {
+            "id": "workflow_is_registered",
+            "status": "PASS",
+            "message": "Router 必须输出已注册 Workflow、risk_profile_id 及专用策略。"
+          },
+          {
+            "id": "main_scene_uses_current_evidence",
+            "status": "PASS",
+            "message": "主场景支持只能引用当前事件 layer=0 的 Evidence ID；无效引用：无。"
+          },
+          {
+            "id": "workflow_contract_is_bound",
+            "status": "PASS",
+            "message": "专用 Workflow 证据契约必须绑定 Router 选择且包含 evidence schema。"
+          },
+          {
+            "id": "risk_profile_matches_scene",
+            "status": "PASS",
+            "message": "风险 Profile (malware_file) 必须与主场景 (malware_file) 一致。"
+          },
+          {
+            "id": "risk_profile_matches_router",
+            "status": "PASS",
+            "message": "Risk Agent 必须使用 Router 选定的 risk_profile_id，不得二次猜测场景。"
+          },
+          {
+            "id": "remediation_matches_scene",
+            "status": "PASS",
+            "message": "无需执行数据暴露专用修复冲突检查。"
+          },
+          {
+            "id": "security_claims_have_evidence",
+            "status": "PASS",
+            "message": "攻击成功、成功利用、数据外泄或未授权访问成功等结论必须有对应直接证据。"
+          },
+          {
+            "id": "upstream_state_is_consistent",
+            "status": "PASS",
+            "message": "上游规范化/字段语义存在冲突，必须在交付前保留 REVIEW FAILED。"
+          }
+        ],
+        "failure_reason": "缺少必需报告章节：响应、恢复, 沟通、升级",
+        "rollback_target": "report",
+        "reviewed_final_report": true,
+        "conflicts": [],
+        "llm_review": {
+          "approved": true,
+          "issues": [],
+          "correction_instructions": []
+        },
+        "reference_issues": [
+          "报告引用了未提供的知识片段"
+        ],
+        "missing_sections": [
+          "响应、恢复",
+          "沟通、升级"
+        ],
+        "boundary": "历史经验未被当作当前事件证据；最终 Markdown 已与规范化事件、业务上下文、主场景、证据和风险 Profile 交叉复核；报告未声明任何系统动作已执行。",
+        "report_characters": 13987,
+        "review_iteration": 2
+      },
+      "report_characters": 13987,
+      "model_calls": [
+        {
+          "stage": "evidence_reasoning",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 10074,
+            "completion_tokens": 1012,
+            "total_tokens": 11086,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 10074
+          },
+          "latency_ms": 13026.15
+        },
+        {
+          "stage": "report_generation",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 12760,
+            "completion_tokens": 5588,
+            "total_tokens": 18348,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 12760
+          },
+          "latency_ms": 49810.63
+        },
+        {
+          "stage": "report_review",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 19656,
+            "completion_tokens": 636,
+            "total_tokens": 20292,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 19656
+          },
+          "latency_ms": 13313.82
+        },
+        {
+          "stage": "report_generation",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 14190,
+            "completion_tokens": 7961,
+            "total_tokens": 22151,
+            "prompt_tokens_details": {
+              "cached_tokens": 12672
+            },
+            "prompt_cache_hit_tokens": 12672,
+            "prompt_cache_miss_tokens": 1518
+          },
+          "latency_ms": 67581.35
+        },
+        {
+          "stage": "report_review",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 23641,
+            "completion_tokens": 715,
+            "total_tokens": 24356,
+            "prompt_tokens_details": {
+              "cached_tokens": 6912
+            },
+            "prompt_cache_hit_tokens": 6912,
+            "prompt_cache_miss_tokens": 16729
+          },
+          "latency_ms": 11679.05
+        },
+        {
+          "stage": "report_generation",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 14205,
+            "completion_tokens": 7006,
+            "total_tokens": 21211,
+            "prompt_tokens_details": {
+              "cached_tokens": 12672
+            },
+            "prompt_cache_hit_tokens": 12672,
+            "prompt_cache_miss_tokens": 1533
+          },
+          "latency_ms": 56444.24
+        },
+        {
+          "stage": "report_review",
+          "framework": "langchain",
+          "model_provider": "deepseek",
+          "model_name": "deepseek-v4-flash",
+          "success": true,
+          "fallback_used": false,
+          "usage": {
+            "prompt_tokens": 22643,
+            "completion_tokens": 25,
+            "total_tokens": 22668,
+            "prompt_tokens_details": {
+              "cached_tokens": 12672
+            },
+            "prompt_cache_hit_tokens": 12672,
+            "prompt_cache_miss_tokens": 9971
+          },
+          "latency_ms": 4504.54
+        }
+      ]
+    },
+    {
+      "event": "final",
+      "status": "failed",
+      "code": "REVIEW_REJECTED",
+      "message": "模型报告在有限次数修正后仍未通过复核，未交付研判结果。"
+    }
+  ]
+}

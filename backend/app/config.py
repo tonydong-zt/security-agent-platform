@@ -1,190 +1,214 @@
 from __future__ import annotations
 
-from functools import lru_cache
-from pathlib import Path
-from typing import Literal
+import json
+import os
+import threading
+from dataclasses import dataclass
+from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import keyring
+from keyring.errors import KeyringError, PasswordDeleteError
 
-from app.errors import ConfigError
+SERVICE_NAME = "AI-Security-Local-Model"
+LEGACY_SERVICE_NAME = "AI-Security-Local-DeepSeek"
+ACCOUNT_NAME = "default"
+
+PROVIDER_PRESETS: dict[str, dict[str, object]] = {
+    "deepseek": {
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-chat",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+    },
+    "openai-compatible": {
+        "label": "OpenAI-compatible",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-5",
+        "models": ["gpt-5"],
+    },
+    "custom": {
+        "label": "自定义兼容接口",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "default_model": "local-model",
+        "models": [],
+    },
+}
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+@dataclass
+class ModelConfig:
+    provider: str = "deepseek"
+    model: str = "deepseek-chat"
+    base_url: str = "https://api.deepseek.com"
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
+class ConfigStore:
+    def __init__(self) -> None:
+        provider = os.getenv("MODEL_PROVIDER", "deepseek").strip() or "deepseek"
+        if provider not in PROVIDER_PRESETS:
+            provider = "custom"
+        preset = PROVIDER_PRESETS[provider]
+        model = (
+            os.getenv("MODEL_NAME")
+            or os.getenv("DEEPSEEK_MODEL")
+            or str(preset["default_model"])
+        )
+        base_url = (
+            os.getenv("MODEL_BASE_URL")
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or str(preset["base_url"])
+        )
+        self._runtime_key = ""
+        self._config = ModelConfig(provider=provider, model=model, base_url=base_url)
+        self._lock = threading.Lock()
 
-    LLM_PROVIDER: Literal["deepseek", "openai_compatible"] = "deepseek"
-    LLM_API_KEY: str | None = None
-    LLM_BASE_URL: str | None = None
-    LLM_MODEL: str | None = None
-    LLM_TEMPERATURE: float = 0.2
-    LLM_TIMEOUT_SECONDS: int = 60
+    def api_key(self) -> str:
+        environment_key = (
+            os.getenv("MODEL_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
+        ).strip()
+        if environment_key:
+            return environment_key
+        with self._lock:
+            if self._runtime_key:
+                return self._runtime_key
+        stored = self._read_stored()
+        if not stored:
+            return ""
+        try:
+            payload = json.loads(stored)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return stored
+        if not isinstance(payload, dict):
+            return ""
+        self._apply_stored_config(payload)
+        return str(payload.get("api_key", ""))
 
-    DEEPSEEK_API_KEY: str | None = None
-    DEEPSEEK_BASE_URL: str | None = None
-    DEEPSEEK_MODEL: str | None = None
-    DEEPSEEK_THINKING_ENABLED: bool = True
-    DEEPSEEK_REASONING_EFFORT: str = "high"
+    def _read_stored(self) -> str:
+        for service in (SERVICE_NAME, LEGACY_SERVICE_NAME):
+            try:
+                stored = keyring.get_password(service, ACCOUNT_NAME) or ""
+            except KeyringError:
+                continue
+            if stored:
+                return stored
+        return ""
 
-    EMBEDDING_PROVIDER: Literal["openai_compatible", "gemini", "local", ""] = ""
-    EMBEDDING_API_KEY: str | None = None
-    EMBEDDING_BASE_URL: str | None = None
-    EMBEDDING_MODEL: str | None = None
-    LOCAL_EMBEDDING_MODEL: str | None = None
-    GEMINI_API_KEY: str | None = None
-    GEMINI_EMBEDDING_MODEL: str | None = None
-    GEMINI_EMBEDDING_TASK_TYPE: str = "RETRIEVAL_DOCUMENT"
-    GEMINI_EMBEDDING_OUTPUT_DIMENSION: int | None = None
+    def _apply_stored_config(self, payload: dict[str, object]) -> None:
+        if "MODEL_NAME" in os.environ or "MODEL_BASE_URL" in os.environ:
+            return
+        provider = str(payload.get("provider", "deepseek"))
+        if provider not in PROVIDER_PRESETS:
+            provider = "custom"
+        model = str(payload.get("model", "")).strip()
+        base_url = str(payload.get("base_url", "")).strip()
+        if not model:
+            model = str(PROVIDER_PRESETS[provider]["default_model"])
+        if not base_url:
+            base_url = str(PROVIDER_PRESETS[provider]["base_url"])
+        try:
+            _validate_base_url(base_url)
+        except ValueError:
+            return
+        with self._lock:
+            self._config = ModelConfig(provider, model, base_url)
 
-    CHROMA_PERSIST_DIR: str = "./data/chroma"
-    CHROMA_COLLECTION_NAME: str = "security_knowledge"
+    def public(self) -> dict[str, object]:
+        key = self.api_key()
+        preset = PROVIDER_PRESETS.get(self._config.provider, PROVIDER_PRESETS["custom"])
+        return {
+            "configured": bool(key),
+            "masked_key": f"{key[:3]}***{key[-4:]}" if len(key) >= 8 else "",
+            "provider": self._config.provider,
+            "provider_label": preset["label"],
+            "model": self._config.model,
+            "base_url": self._config.base_url,
+            "storage": "环境变量或 Windows 凭据管理器",
+            "providers": [
+                {
+                    "id": provider_id,
+                    "label": item["label"],
+                    "base_url": item["base_url"],
+                    "default_model": item["default_model"],
+                    "models": item["models"],
+                }
+                for provider_id, item in PROVIDER_PRESETS.items()
+            ],
+        }
 
-    DATABASE_URL: str | None = None
+    def configure(
+        self,
+        api_key: str,
+        model: str,
+        persist: bool,
+        provider: str = "deepseek",
+        base_url: str = "",
+    ) -> dict[str, object]:
+        key = api_key.strip()
+        if len(key) < 8:
+            raise ValueError("API Key 长度不正确")
+        if provider not in PROVIDER_PRESETS:
+            raise ValueError("不支持的模型供应商")
+        selected_model = model.strip()
+        if not selected_model or len(selected_model) > 128:
+            raise ValueError("模型名称不正确")
+        selected_url = base_url.strip() or str(PROVIDER_PRESETS[provider]["base_url"])
+        _validate_base_url(selected_url)
+        with self._lock:
+            self._config = ModelConfig(
+                provider, selected_model, selected_url.rstrip("/")
+            )
+            self._runtime_key = key
+        if persist:
+            try:
+                keyring.set_password(
+                    SERVICE_NAME,
+                    ACCOUNT_NAME,
+                    json.dumps(
+                        {
+                            "api_key": key,
+                            "provider": provider,
+                            "model": selected_model,
+                            "base_url": selected_url.rstrip("/"),
+                        }
+                    ),
+                )
+            except KeyringError as error:
+                raise ValueError(f"无法写入 Windows 凭据管理器：{error}") from error
+        return self.public()
 
-    SIEM_API_URL: str | None = None
-    SIEM_API_KEY: str | None = None
-    SIEM_VENDOR: str | None = None
-    SIEM_VERIFY_SSL: bool = True
-
-    EDR_API_URL: str | None = None
-    EDR_API_KEY: str | None = None
-    EDR_VENDOR: str | None = None
-    EDR_VERIFY_SSL: bool = True
-
-    FIREWALL_API_URL: str | None = None
-    FIREWALL_API_KEY: str | None = None
-    FIREWALL_VENDOR: str | None = None
-    FIREWALL_VERIFY_SSL: bool = True
-
-    NVD_API_KEY: str | None = None
-    CISA_KEV_SOURCE_URL: str | None = None
-    MITRE_ATTACK_SOURCE_URL: str | None = None
-    OWASP_SOURCE_URL: str | None = None
-
-    APP_ENV: str = "development"
-    BACKEND_HOST: str = "0.0.0.0"
-    BACKEND_PORT: int = 8000
-    FRONTEND_PORT: int = 5173
+    def clear(self) -> dict[str, object]:
+        with self._lock:
+            self._runtime_key = ""
+        for service in (SERVICE_NAME, LEGACY_SERVICE_NAME):
+            try:
+                keyring.delete_password(service, ACCOUNT_NAME)
+            except (KeyringError, PasswordDeleteError):
+                pass
+        return self.public()
 
     @property
-    def database_url_resolved(self) -> str:
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        return f"sqlite:///{PROJECT_ROOT / 'data' / 'security_agent.db'}"
-
-    @field_validator("GEMINI_EMBEDDING_OUTPUT_DIMENSION", mode="before")
-    @classmethod
-    def blank_int_to_none(cls, value):
-        if value == "":
-            return None
-        return value
+    def model(self) -> str:
+        return self._config.model
 
     @property
-    def chroma_persist_path(self) -> Path:
-        path = Path(self.CHROMA_PERSIST_DIR)
-        return path if path.is_absolute() else PROJECT_ROOT / path
+    def provider(self) -> str:
+        return self._config.provider
 
     @property
-    def raw_data_dir(self) -> Path:
-        return PROJECT_ROOT / "data" / "raw"
-
-    @property
-    def log_data_dir(self) -> Path:
-        return PROJECT_ROOT / "data" / "logs"
+    def base_url(self) -> str:
+        return self._config.base_url.rstrip("/")
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+def _validate_base_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("接口地址必须是有效的 HTTP(S) URL")
+    if parsed.scheme == "http" and parsed.hostname not in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }:
+        raise ValueError("非本机模型接口必须使用 HTTPS")
 
 
-def require_llm_config(settings: Settings | None = None) -> None:
-    settings = settings or get_settings()
-    if settings.LLM_PROVIDER == "deepseek":
-        missing = [
-            key
-            for key, value in {
-                "DEEPSEEK_API_KEY": settings.DEEPSEEK_API_KEY,
-                "DEEPSEEK_BASE_URL": settings.DEEPSEEK_BASE_URL,
-                "DEEPSEEK_MODEL": settings.DEEPSEEK_MODEL,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise ConfigError(f"Missing DeepSeek configuration: {', '.join(missing)}")
-    elif settings.LLM_PROVIDER == "openai_compatible":
-        missing = [
-            key
-            for key, value in {
-                "LLM_API_KEY": settings.LLM_API_KEY,
-                "LLM_BASE_URL": settings.LLM_BASE_URL,
-                "LLM_MODEL": settings.LLM_MODEL,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise ConfigError(f"Missing OpenAI-compatible LLM configuration: {', '.join(missing)}")
-
-
-def require_embedding_config(settings: Settings | None = None) -> None:
-    settings = settings or get_settings()
-    if settings.EMBEDDING_PROVIDER == "openai_compatible":
-        missing = [
-            key
-            for key, value in {
-                "EMBEDDING_API_KEY": settings.EMBEDDING_API_KEY,
-                "EMBEDDING_BASE_URL": settings.EMBEDDING_BASE_URL,
-                "EMBEDDING_MODEL": settings.EMBEDDING_MODEL,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise ConfigError(f"Missing embedding configuration: {', '.join(missing)}")
-    elif settings.EMBEDDING_PROVIDER == "local":
-        if not settings.LOCAL_EMBEDDING_MODEL:
-            raise ConfigError("Missing embedding configuration: LOCAL_EMBEDDING_MODEL")
-    elif settings.EMBEDDING_PROVIDER == "gemini":
-        missing = [
-            key
-            for key, value in {
-                "GEMINI_API_KEY": settings.GEMINI_API_KEY,
-                "GEMINI_EMBEDDING_MODEL": settings.GEMINI_EMBEDDING_MODEL,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise ConfigError(f"Missing Gemini embedding configuration: {', '.join(missing)}")
-    else:
-        raise ConfigError("Embedding is not configured. Set EMBEDDING_PROVIDER and model settings.")
-
-
-def missing_required_config(settings: Settings | None = None) -> list[str]:
-    settings = settings or get_settings()
-    missing: list[str] = []
-    try:
-        require_llm_config(settings)
-    except ConfigError as exc:
-        missing.extend(_extract_names(str(exc)))
-    try:
-        require_embedding_config(settings)
-    except ConfigError as exc:
-        missing.extend(_extract_names(str(exc)))
-    return sorted(set(missing))
-
-
-def _extract_names(message: str) -> list[str]:
-    names = []
-    for token in message.replace(":", " ").replace(",", " ").split():
-        if token.isupper() and "_" in token:
-            names.append(token)
-    if "Embedding is not configured" in message:
-        names.append("EMBEDDING_PROVIDER")
-    return names
+config_store = ConfigStore()
